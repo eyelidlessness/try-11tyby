@@ -1,0 +1,311 @@
+const glob = require('glob');
+const path = require('path');
+const fs = require('fs');
+const ExtractCssPlugin = require('mini-css-extract-plugin');
+const CopyPlugin = require('copy-webpack-plugin');
+const AssetsManifestPlugin = require('webpack-assets-manifest');
+const TerserPlugin = require('terser-webpack-plugin');
+
+/* -----------------------------------
+ *
+ * Flags
+ *
+ * -------------------------------- */
+
+const RELEASE = !process.argv.includes('--watch');
+
+/* -----------------------------------
+ *
+ * SASS
+ *
+ * -------------------------------- */
+
+const sassLoader = {
+  loader: 'sass-loader',
+  options: {
+    sassOptions: {
+      fiber: false,
+      data: '@import "template";',
+      outputStyle: 'compressed',
+      sourceMap: false,
+      includePaths: ['./src/styles'],
+    },
+  },
+};
+
+/* -----------------------------------
+ *
+ * Pages
+ *
+ * -------------------------------- */
+
+const pages = {
+  mode: RELEASE ? 'production' : 'development',
+  entry: glob.sync(`${__dirname}/src/**/*.11ty.ts*`).reduce(getModuleFile, {}),
+  context: path.join(__dirname, '/src/'),
+  cache: true,
+  target: 'node',
+  externals: fs.readdirSync('node_modules'),
+  output: {
+    path: path.join(__dirname, '/src/_js'),
+    filename: '[name].js',
+    libraryTarget: 'umd',
+  },
+  resolve: {
+    extensions: ['.js', '.ts', '.tsx', '.json', '.scss'],
+    alias: {
+      '@': path.resolve(__dirname, `./src/`),
+    },
+  },
+  plugins: [
+    new ExtractCssPlugin({
+      filename: RELEASE ? 'assets/[name].[contenthash:8].css' : 'assets/[name].css',
+    }),
+    new CopyPlugin({
+      patterns: [
+        {
+          from: 'modules/articles',
+          to: 'articles',
+          globOptions: {
+            ignore: ['**/*.ts*', '**/*.scss'],
+          },
+        },
+      ],
+    }),
+    new AssetsManifestPlugin({
+      output: 'assets.json',
+      merge: true,
+      customize: (asset) => {
+        const [key] = asset.key.split('assets/').slice(-1);
+        const [value] = asset.value.split('assets/').slice(-1);
+
+        if (value.endsWith('.11ty.js')) {
+          return false;
+        }
+
+        return { key, value };
+      },
+    }),
+  ],
+  module: {
+    rules: [
+      {
+        test: /\.tsx?$/,
+        use: [
+          {
+            loader: 'ts-loader',
+          },
+        ],
+      },
+      {
+        test: /\.(sa|sc|c)ss$/,
+        exclude: /\.module\.(sa|sc|c)ss$/,
+        use: [
+          ExtractCssPlugin.loader,
+          {
+            loader: 'css-loader',
+            options: {
+              modules: 'global',
+              importLoaders: 2,
+              sourceMap: false,
+            },
+          },
+          sassLoader,
+        ],
+      },
+      {
+        test: /\.module\.(sa|sc|c)ss$/,
+        use: [
+          ExtractCssPlugin.loader,
+          {
+            loader: 'css-loader',
+            options: {
+              modules: {
+                localIdentName: '[local]_[hash:base64:6]',
+              },
+              importLoaders: 2,
+              sourceMap: false,
+            },
+          },
+          sassLoader,
+        ],
+      },
+      {
+        test: /\.(png|jpe?g|gif|svg)$/i,
+        use: [
+          {
+            loader: 'file-loader',
+            options: {
+              name: '[hash:8].[ext]',
+              outputPath: '/assets',
+            },
+          },
+        ],
+      },
+    ],
+  },
+  optimization: {
+    minimizer: [
+      new TerserPlugin({
+        cache: !RELEASE,
+        parallel: true,
+        terserOptions: {
+          keep_fnames: true,
+        },
+      }),
+    ],
+  },
+};
+
+/* -----------------------------------
+ *
+ * Entry
+ *
+ * -------------------------------- */
+
+const entry = {
+  mode: RELEASE ? 'production' : 'development',
+  entry: glob.sync(`${__dirname}/src/modules/**/*.entry.ts*`).reduce(getModuleFile, {}),
+  context: path.join(__dirname, '/src/'),
+  cache: true,
+  target: 'web',
+  output: {
+    path: path.join(__dirname, '/src/_js/assets'),
+    filename: RELEASE ? '[name].[chunkhash:8].js' : '[name].js',
+    publicPath: '/assets/',
+  },
+  resolve: {
+    extensions: ['.js', '.ts', '.tsx', '.json', '.scss'],
+    alias: {
+      '@': path.resolve(__dirname, `./src/`),
+    },
+  },
+  plugins: [
+    new AssetsManifestPlugin({
+      output: '../assets.json',
+      merge: true,
+    }),
+  ],
+  module: {
+    rules: [
+      {
+        test: /\.tsx?$/,
+        use: [
+          {
+            loader: 'ts-loader',
+            options: {
+              compilerOptions: {
+                target: 'es5',
+              },
+            },
+          },
+        ],
+      },
+      {
+        test: /\.(sa|sc|c)ss$/,
+        exclude: /\.module\.(sa|sc|c)ss$/,
+        use: [
+          'style-loader',
+          {
+            loader: 'css-loader',
+            options: {
+              modules: 'global',
+              importLoaders: 2,
+              sourceMap: false,
+            },
+          },
+          sassLoader,
+        ],
+      },
+      {
+        test: /\.module\.(sa|sc|c)ss$/,
+        use: [
+          'style-loader',
+          {
+            loader: 'css-loader',
+            options: {
+              modules: {
+                localIdentName: '[local]_[hash:base64:6]',
+              },
+              importLoaders: 2,
+              sourceMap: false,
+            },
+          },
+          sassLoader,
+        ],
+      },
+      {
+        test: /\.(png|jpe?g|gif|svg)$/i,
+        use: [
+          {
+            loader: 'file-loader',
+            options: {
+              name: '[hash:8].[ext]',
+            },
+          },
+        ],
+      },
+    ],
+  },
+  optimization: {
+    usedExports: true,
+    mergeDuplicateChunks: true,
+    moduleIds: 'hashed',
+    runtimeChunk: false,
+    splitChunks: {
+      name: true,
+      chunks: 'async',
+      cacheGroups: {
+        default: false,
+        vendor: {
+          test: /[\\/]node_modules[\\/]/,
+          name: splitVendorChunks,
+          chunks: 'all',
+          enforce: true,
+        },
+      },
+    },
+  },
+};
+
+/* -----------------------------------
+ *
+ * Module
+ *
+ * -------------------------------- */
+
+function getModuleFile(result, file) {
+  let [name] = file.split('src/').slice(-1);
+
+  if (file.includes('modules/')) {
+    [name] = file.split('modules/').slice(-1);
+  }
+
+  result[name.replace(/\.tsx?$/g, '')] = file;
+
+  return result;
+}
+
+/* -----------------------------------
+ *
+ * Vendor
+ *
+ * -------------------------------- */
+
+function splitVendorChunks(module, chunks) {
+  const chunkNames = chunks.filter(({ name }) => !(name || '').endsWith('.entry'));
+
+  if (chunkNames.length) {
+    return chunkNames[0].name;
+  }
+
+  return 'vendor';
+}
+
+/* -----------------------------------
+ *
+ * Export
+ *
+ * -------------------------------- */
+
+module.exports = [pages, entry];
